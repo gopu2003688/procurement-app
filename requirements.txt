@@ -1,0 +1,5 @@
+streamlit
+msal
+requests
+python-docx
+pandas
