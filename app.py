@@ -71,10 +71,19 @@ def get_token(client_id):
 def headers(t): return {"Authorization": f"Bearer {t}"}
 
 def list_inbox(token, only_mrf=True, top=20):
-    url = f"{GRAPH}/me/mailFolders/inbox/messages?$top={top}&$orderby=receivedDateTime desc&$filter=hasAttachments eq true"
-    if only_mrf: url += " and contains(subject,'MRF')"
+    # Fetch only UNREAD emails, and expand to see attachment names
+    url = f"{GRAPH}/me/mailFolders/inbox/messages?$top={top}&$orderby=receivedDateTime desc&$filter=hasAttachments eq true and isRead eq false&$expand=attachments($select=name)"
     r = requests.get(url, headers=headers(token)); r.raise_for_status()
-    return r.json().get("value", [])
+    
+    valid_mails = []
+    for m in r.json().get("value", []):
+        for att in m.get("attachments", []):
+            name = (att.get("name") or "").lower()
+            # Check if 'mrf' is in the file name and it's a Word/Text doc
+            if (not only_mrf) or ("mrf" in name and name.endswith((".docx", ".txt"))):
+                valid_mails.append(m)
+                break # Found a match, keep this email
+    return valid_mails
 
 def get_attachment(token, msg_id):
     r = requests.get(f"{GRAPH}/me/messages/{msg_id}/attachments", headers=headers(token)); r.raise_for_status()
