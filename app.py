@@ -239,56 +239,74 @@ def doc_to_bytes(doc):
 
 # ---------------- MRF parsing (official UVC form) ----------------
 def parse_mrf_docx(data):
-    doc = Document(io.BytesIO(data))
-    fields = {}
-    for row in doc.tables[0].rows:
-        cs = row.cells
-        for i in range(0, len(cs) - 1, 2):
-            fields[cs[i].text.strip().replace("\n", " ")] = cs[i + 1].text.strip()
+    try:
+        doc = Document(io.BytesIO(data))
+        fields = {}
+        if doc.tables:
+            for row in doc.tables[0].rows:
+                cs = row.cells
+                for i in range(0, len(cs) - 1, 2):
+                    fields[cs[i].text.strip().replace("\n", " ")] = cs[i + 1].text.strip()
 
-    def getf(prefix):
-        for k, v in fields.items():
-            if k.lower().startswith(prefix.lower()):
-                return v
-        return ""
+        def getf(prefix):
+            for k, v in fields.items():
+                if k.lower().startswith(prefix.lower()):
+                    return v
+            return ""
 
-    items = []
-    t = find_items_table(doc)
-    for row in t.rows[1:]:
-        cs = [c.text.strip() for c in row.cells]
-        if cs[0].isdigit() and cs[1]:
-            items.append(
-                {
-                    "Sl": cs[0],
-                    "Item": cs[1],
-                    "Sample": cs[2],
-                    "Unit": cs[3],
-                    "Qty": cs[4],
-                    "ReqDate": cs[5],
-                }
-            )
-    notes, paras = "", [p.text for p in doc.paragraphs]
-    for i, p in enumerate(paras):
-        if p.strip().startswith("Notes"):
-            notes = paras[i + 1].strip() if i + 1 < len(paras) else ""
-            break
-    mrf = {
-        "mrf_no": getf("MRF No"),
-        "site": getf("Delivery To"),
-        "location": getf("Location"),
-        "oa_building": getf("OA / Building"),
-        "quote_ref": getf("UVC Quote Reference"),
-        "requested_by": getf("Requested By"),
-        "lpo_ref": getf("LPO / WO Ref"),
-        "priority": getf("Priority"),
-        "date": getf("Date"),
-        "items": items,
-        "notes": notes,
-        "project_site": " / ".join(
-            x for x in [getf("Delivery To"), getf("OA / Building")] if x
-        ),
-    }
-    return mrf
+        items = []
+        t = find_items_table(doc)
+        if t:
+            for row in t.rows[1:]:
+                cs = [c.text.strip() for c in row.cells]
+                if len(cs) >= 5 and cs[0].isdigit() and cs[1]:
+                    items.append(
+                        {
+                            "Sl": cs[0],
+                            "Item": cs[1],
+                            "Sample": cs[2] if len(cs) > 2 else "",
+                            "Unit": cs[3] if len(cs) > 3 else "",
+                            "Qty": cs[4] if len(cs) > 4 else "",
+                            "ReqDate": cs[5] if len(cs) > 5 else "",
+                        }
+                    )
+            
+            notes, paras = "", [p.text for p in doc.paragraphs]
+            for i, p in enumerate(paras):
+                if p.strip().startswith("Notes"):
+                    notes = paras[i + 1].strip() if i + 1 < len(paras) else ""
+                    break
+                    
+            mrf = {
+                "mrf_no": getf("MRF No"),
+                "site": getf("Delivery To"),
+                "location": getf("Location"),
+                "oa_building": getf("OA / Building"),
+                "quote_ref": getf("UVC Quote Reference"),
+                "requested_by": getf("Requested By"),
+                "lpo_ref": getf("LPO / WO Ref"),
+                "priority": getf("Priority"),
+                "date": getf("Date"),
+                "items": items,
+                "notes": notes,
+                "project_site": " / ".join(
+                    x for x in [getf("Delivery To"), getf("OA / Building")] if x
+                ),
+            }
+            if items:
+                return mrf
+
+        # Fallback if no items table or no items extracted
+        full_text = "\n".join([p.text for p in doc.paragraphs])
+        for table in doc.tables:
+            for row in table.rows:
+                full_text += "\n" + " | ".join(cell.text.replace("\n", " ") for cell in row.cells)
+        return parse_mrf_text(full_text)
+    except Exception:
+        # Final fallback: just extract whatever text we can and send to text parser
+        doc = Document(io.BytesIO(data))
+        full_text = "\n".join([p.text for p in doc.paragraphs])
+        return parse_mrf_text(full_text)
 
 
 LINE_RE = re.compile(
@@ -335,9 +353,26 @@ def parse_mrf_text(text):
 
 
 def parse_mrf(name, data):
-    if name.lower().endswith(".docx"):
+    name_lower = name.lower()
+    if name_lower.endswith(".docx"):
         return parse_mrf_docx(data)
-    return parse_mrf_text(data.decode("utf-8", errors="ignore"))
+    elif name_lower.endswith(".pdf"):
+        import pypdf
+        try:
+            reader = pypdf.PdfReader(io.BytesIO(data))
+            text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+            return parse_mrf_text(text)
+        except Exception as e:
+            raise Exception(f"Failed to extract text from PDF: {str(e)}")
+    elif name_lower.endswith(".doc"):
+        raise Exception("Older '.doc' files are not supported because they are binary files. Please save the file as a '.docx' or '.pdf' and try again.")
+    
+    # Try decoding as text, but gracefully catch decoding errors
+    try:
+        text = data.decode("utf-8")
+        return parse_mrf_text(text)
+    except UnicodeDecodeError:
+        raise Exception("This file appears to be a binary format that the app cannot read directly. Please save it as a .docx, .pdf, or plain .txt file and try again.")
 
 
 # ---------------- document builders (official UVC templates) ----------------
@@ -455,6 +490,11 @@ def ui():
         cfg["approval_keyword"] = st.text_input(
             "Approval keyword", cfg["approval_keyword"]
         )
+        st.divider()
+        st.subheader("🔢 Sequences")
+        cfg["next_rfq_seq"] = st.text_input("Next RFQ sequence no.", cfg.get("next_rfq_seq", "75"))
+        cfg["next_grn_seq"] = st.text_input("Next GRN sequence no.", cfg.get("next_grn_seq", "1287"))
+        
         save_cfg(cfg)
         st.divider()
         st.subheader("📇 Suppliers")
