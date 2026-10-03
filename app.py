@@ -485,7 +485,7 @@ def ui():
     with t1:
         st.subheader("Material Requisition Form")
         up = st.file_uploader(
-            "Upload MRF (.docx from Outlook or saved file)", type=["docx", "txt"]
+            "Upload MRF (any text document file)", type=None
         )
         token = st.session_state.get("token")
         if token:
