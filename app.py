@@ -54,12 +54,15 @@ def load_suppliers():
 
     cols = ["name", "attention", "phone", "email"]
     if os.path.exists(suppliers_path()):
-        df = pd.read_csv(suppliers_path())
+        df = pd.read_csv(suppliers_path(), dtype=str)
         for c in cols:
             if c not in df.columns:
                 df[c] = ""
-        return df[cols]
-    return pd.DataFrame(columns=cols)
+        return df[cols].fillna("")
+    df = pd.DataFrame(columns=cols)
+    for c in cols:
+        df[c] = df[c].astype(str)
+    return df
 
 
 def save_suppliers(df):
