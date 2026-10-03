@@ -365,7 +365,25 @@ def parse_mrf(name, data):
         except Exception as e:
             raise Exception(f"Failed to extract text from PDF: {str(e)}")
     elif name_lower.endswith(".doc"):
-        raise Exception("Older '.doc' files are not supported because they are binary files. Please save the file as a '.docx' or '.pdf' and try again.")
+        import shutil, subprocess, tempfile
+        # Try using antiword if it's installed (Streamlit Cloud via packages.txt)
+        if shutil.which("antiword"):
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".doc", delete=False) as tf:
+                    tf.write(data)
+                    tf_name = tf.name
+                result = subprocess.run(["antiword", tf_name], capture_output=True, text=True)
+                os.unlink(tf_name)
+                if result.returncode == 0 and result.stdout.strip():
+                    return parse_mrf_text(result.stdout)
+            except Exception:
+                pass
+        
+        # Fallback for Windows or if antiword fails: extract printable strings from the binary stream
+        clean_bytes = data.replace(b'\x00', b'')
+        text = clean_bytes.decode("ascii", errors="ignore")
+        text = re.sub(r'[^\x20-\x7E\r\n\t]', ' ', text)
+        return parse_mrf_text(text)
     
     # Try decoding as text, but gracefully catch decoding errors
     try:
